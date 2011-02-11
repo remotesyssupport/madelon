@@ -1,0 +1,129 @@
+#! /usr/bin/env python
+
+from libcloud.types import Provider 
+from libcloud.providers import get_driver 
+from libcloud.deployment import MultiStepDeployment, ScriptDeployment, SSHKeyDeployment 
+from libcloud.ssh import SSHClient, ParamikoSSHClient
+import paramiko
+from paramiko.rsakey import RSAKey
+import os, sys, random, string, ConfigParser
+
+# Fetch some values from the config file
+config = ConfigParser.RawConfigParser()
+config.read('config/madelon.ini')
+
+# Try to abstract the provider here, as we may end up supporting others
+# Theoretically since we are using libcloud, it should support any
+# provider that supports the deploy_node function (Amazon EC2 doesn't)
+provider = config.get('Madelon', 'provider')
+provider_driver = config.get(provider, 'driver')
+
+# Fetch the puppet manifest repo
+gitrepo = config.get('Git', 'repo')
+
+# API credentials
+# Some providers don't have user attributes, only keys
+# Bit of a hack right now
+if provider not in [ 'Slicehost', 'Linode']:
+	user = config.get(provider, 'user')
+
+key = config.get(provider, 'key')
+
+# Preferred image and size
+config_distro = config.get(provider, 'distro')
+config_size = config.get(provider, 'size')
+
+domain = sys.argv[1]
+
+ssh = 0
+remote_host = 0
+
+def dependency_check():
+	try:
+		open(os.path.expanduser("~/.ssh/id_rsa.pub")).read()
+	except IOError:
+		print "You need at least a public key called id_rsa.pub in your .ssh directory"
+		sys.exit(1)
+	try:
+		import paramiko
+	except ImportError:
+		print "You need the Paramiko SSH module for Python installed (apt-get install python-paramiko)"
+		sys.exit(1)
+
+def ssh_connect(remote_host):
+        rsa_key = os.path.expanduser('~/.ssh/id_rsa')
+        mykey = paramiko.RSAKey.from_private_key_file(rsa_key)
+        global ssh
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.load_system_host_keys()
+        ssh.connect(remote_host, username='root', pkey=mykey)
+
+def ssh_close():
+        ssh.close()
+
+def deploy_private_key():
+        # Open an SFTP connection for transferring files
+        ftp = ssh.open_sftp()
+	# putting the private key up so we can git clone puppet-master. Hopefully won't always be needed
+        ftp.put(os.path.expanduser('~/.ssh/id_rsa'), '/root/.ssh/id_rsa')
+	ftp.put('known_hosts', '/root/.ssh/known_hosts')
+        keyfile = ftp.open('/root/.ssh/id_rsa', 'r')
+        keyfile.chmod(0400)
+        keyfile.close()
+
+def fetch_and_run_cap(remote_host):
+	os.system('git clone %s ~/puppet' % gitrepo)
+        os.system('cd ~/puppet && cap puppet:prep HOST="%s"' % remote_host)
+        os.system('cd ~/puppet && cap puppet:go HOST="%s"' % remote_host)
+
+def main():
+	# Run some tests
+	dependency_check()
+
+	# Make a new connection
+	Driver = get_driver( getattr(Provider, provider_driver) )
+	try:
+		conn = Driver(user, key)
+	except(NameError):
+		conn = Driver(key)
+
+	# Get a list of the available images and sizes
+	images = conn.list_images()
+	sizes = conn.list_sizes()
+
+	# We'll use the distro and size from the config ini
+	# We accept the first result in any that match for now
+	preferred_image = [image for image in images if config_distro in image.name]
+	preferred_size = [size for size in sizes if config_size in size.name]
+
+	# Commands to run immediately after installation
+	dispatch = [
+		SSHKeyDeployment(open(os.path.expanduser("~/.ssh/id_rsa.pub")).read()),
+	]
+	msd = MultiStepDeployment(dispatch) 
+
+	# Create and deploy a new server now, and run the deployment steps defined above
+	print "Provisioning server and running deployment processes"
+	node = conn.deploy_node(name=domain, image=preferred_image[0], size=preferred_size[0], deploy=msd)
+
+	print "Provisioning complete, you can ssh as root to %s" % node.public_ip[0]
+	if node.extra.get('password'):
+		print "The root user's password is %s" % node.extra.get('password')
+
+	remote_host = node.public_ip[0]
+
+        if config.getboolean('Git', 'private'):
+		# This is a private repo. We need to do some extra legwork to be able to clone it properly.
+		# Connect to the new host
+		ssh_connect(remote_host)
+		# Send the private key. 
+		deploy_private_key()
+		# Close the SSH connection
+		ssh_close()
+
+	# Now locally fetch the puppet manifests, and run the cap commands to the remote host
+	fetch_and_run_cap(remote_host)
+
+if __name__ == "__main__":
+	main()
