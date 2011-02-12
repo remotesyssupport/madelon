@@ -27,6 +27,10 @@ key = config.get(provider, 'key')
 config_distro = config.get(provider, 'distro')
 config_size = config.get(provider, 'size')
 
+# The git repo of puppet manifests
+repo = config.get('Git', 'repo')
+
+# Hostname for the new server
 domain = sys.argv[1]
 
 remote_host = 0
@@ -83,7 +87,10 @@ def main():
 		os.system('fab -H %s -u root deploy_key' % node.public_ip[0])
 
 	# Now fetch and run puppet on the remote host
-	os.system('fab -H %s -u root deploy_puppet' % node.public_ip[0])
+        if config.getboolean('Puppet', 'simulate'):
+		os.system('fab -H %s -u root deploy_puppet:repo=%s,simulate=true' % (node.public_ip[0], repo))
+	else:
+		os.system('fab -H %s -u root deploy_puppet:repo=%s' % (node.public_ip[0], repo))
 
 if __name__ == "__main__":
 	main()
