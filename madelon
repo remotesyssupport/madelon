@@ -3,10 +3,7 @@
 from libcloud.types import Provider 
 from libcloud.providers import get_driver 
 from libcloud.deployment import MultiStepDeployment, ScriptDeployment, SSHKeyDeployment 
-from libcloud.ssh import SSHClient, ParamikoSSHClient
-import paramiko
-from paramiko.rsakey import RSAKey
-import os, sys, random, string, ConfigParser
+import os, sys, ConfigParser
 
 # Fetch some values from the config file
 config = ConfigParser.RawConfigParser()
@@ -17,9 +14,6 @@ config.read('config/madelon.ini')
 # provider that supports the deploy_node function (Amazon EC2 doesn't)
 provider = config.get('Madelon', 'provider')
 provider_driver = config.get(provider, 'driver')
-
-# Fetch the puppet manifest repo
-gitrepo = config.get('Git', 'repo')
 
 # API credentials
 # Some providers don't have user attributes, only keys
@@ -35,47 +29,17 @@ config_size = config.get(provider, 'size')
 
 domain = sys.argv[1]
 
-ssh = 0
 remote_host = 0
 
 def dependency_check():
 	try:
 		open(os.path.expanduser("~/.ssh/id_rsa.pub")).read()
 	except IOError:
-		print "You need at least a public key called id_rsa.pub in your .ssh directory"
-		sys.exit(1)
+		raise SystemExit("You need at least a public key called id_rsa.pub in your .ssh directory")
 	try:
-		import paramiko
+		import fabric
 	except ImportError:
-		print "You need the Paramiko SSH module for Python installed (apt-get install python-paramiko)"
-		sys.exit(1)
-
-def ssh_connect(remote_host):
-        rsa_key = os.path.expanduser('~/.ssh/id_rsa')
-        mykey = paramiko.RSAKey.from_private_key_file(rsa_key)
-        global ssh
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.load_system_host_keys()
-        ssh.connect(remote_host, username='root', pkey=mykey)
-
-def ssh_close():
-        ssh.close()
-
-def deploy_private_key():
-        # Open an SFTP connection for transferring files
-        ftp = ssh.open_sftp()
-	# putting the private key up so we can git clone puppet-master. Hopefully won't always be needed
-        ftp.put(os.path.expanduser('~/.ssh/id_rsa'), '/root/.ssh/id_rsa')
-	ftp.put('known_hosts', '/root/.ssh/known_hosts')
-        keyfile = ftp.open('/root/.ssh/id_rsa', 'r')
-        keyfile.chmod(0400)
-        keyfile.close()
-
-def fetch_and_run_cap(remote_host):
-	os.system('git clone %s ~/puppet' % gitrepo)
-        os.system('cd ~/puppet && cap puppet:prep HOST="%s"' % remote_host)
-        os.system('cd ~/puppet && cap puppet:go HOST="%s"' % remote_host)
+		raise SystemExit("You need the Fabric Python library (apt-get install fabric)")
 
 def main():
 	# Run some tests
@@ -111,19 +75,13 @@ def main():
 	if node.extra.get('password'):
 		print "The root user's password is %s" % node.extra.get('password')
 
-	remote_host = node.public_ip[0]
-
         if config.getboolean('Git', 'private'):
 		# This is a private repo. We need to do some extra legwork to be able to clone it properly.
-		# Connect to the new host
-		ssh_connect(remote_host)
 		# Send the private key. 
-		deploy_private_key()
-		# Close the SSH connection
-		ssh_close()
+		os.system('fab -H %s -u root deploy_key' % node.public_ip[0])
 
-	# Now locally fetch the puppet manifests, and run the cap commands to the remote host
-	fetch_and_run_cap(remote_host)
+	# Now fetch and run puppet on the remote host
+	os.system('fab -H %s -u root deploy_puppet' % node.public_ip[0])
 
 if __name__ == "__main__":
 	main()
