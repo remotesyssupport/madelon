@@ -64,6 +64,8 @@ def main():
 	# Commands to run immediately after installation
 	dispatch = [
 		SSHKeyDeployment(open(os.path.expanduser("~/.ssh/id_rsa.pub")).read()),
+		ScriptDeployment("apt-get update"),
+		ScriptDeployment("apt-get install -y git-core puppet lsb-release"),
 	]
 	msd = MultiStepDeployment(dispatch) 
 
