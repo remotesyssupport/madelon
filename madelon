@@ -74,7 +74,7 @@ def main():
 	msd = MultiStepDeployment(dispatch) 
 
 	# Create and deploy a new server now, and run the deployment steps defined above
-	print "Provisioning server and running deployment processes"
+	print "Provisioning server and installing dependencies..."
 	node = conn.deploy_node(name=domain, image=preferred_image[0], size=preferred_size[0], deploy=msd)
 
 	print "Provisioning complete, you can ssh as root to %s" % node.public_ip[0]
@@ -83,13 +83,17 @@ def main():
 
         if config.getboolean('Git', 'private'):
 		# This is a private repo. We need to do some extra legwork to be able to clone it properly.
-		# Send the private key. 
+		# Send the private key.
+		print "Deploying the private key..."
 		os.system('fab -H %s -u root deploy_key' % node.public_ip[0])
 
 	# Now fetch and run puppet on the remote host
+	print "Fetching the puppet git repo %s" % repo
         if config.getboolean('Puppet', 'simulate'):
+		print "Simulating executing the puppet manifests..."
 		os.system('fab -H %s -u root deploy_puppet:repo=%s,simulate=true' % (node.public_ip[0], repo))
 	else:
+		print "Executing the puppet manifests..."
 		os.system('fab -H %s -u root deploy_puppet:repo=%s' % (node.public_ip[0], repo))
 
 if __name__ == "__main__":
