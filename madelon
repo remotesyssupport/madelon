@@ -89,12 +89,20 @@ def main():
 
 	# Now fetch and run puppet on the remote host
 	print "Fetching the puppet git repo %s" % repo
+	os.system('fab -H %s -u root deploy_puppet:repo=%s' % (node.public_ip[0], repo))
+
+	# Define what roles this server will be, for puppet
+	if config.has_section('Roles'):
+		print "Setting puppet roles for this server..."
+		os.system('fab -H %s -u root select_roles' % node.public_ip[0])
+
+	# Time to run puppet, or simulate it
         if config.getboolean('Puppet', 'simulate'):
 		print "Simulating executing the puppet manifests..."
-		os.system('fab -H %s -u root deploy_puppet:repo=%s,simulate=true' % (node.public_ip[0], repo))
+		os.system('fab -H %s -u root run_puppet:simulate=true' % node.public_ip[0])
 	else:
 		print "Executing the puppet manifests..."
-		os.system('fab -H %s -u root deploy_puppet:repo=%s' % (node.public_ip[0], repo))
+		os.system('fab -H %s -u root run_puppet' % node.public_ip[0])
 
 if __name__ == "__main__":
 	main()
