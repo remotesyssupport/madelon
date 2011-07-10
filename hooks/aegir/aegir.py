@@ -22,7 +22,7 @@ def fab_prepare_apache():
         fabric.run("a2enmod rewrite", pty=True)
         fabric.run("ln -s /var/aegir/config/apache.conf /etc/apache2/conf.d/aegir.conf", pty=True)
 
-# Fabric command to raise PHP CLI memory limit (for Drupal 7 / OpenAtrum)
+# Fabric command to raise PHP CLI memory limit (for Drupal 7 / OpenAtrium)
 def fab_prepare_php():
         print "===> Preparing PHP"
         fabric.run("sed -i s/'memory_limit = 32M'/'memory_limit = 256M'/ /etc/php5/cli/php.ini", pty=True)
@@ -62,20 +62,19 @@ def gen_passwd():
         return ''.join(random.choice(string.ascii_letters + string.digits) for x in range(N))
 
 def main(remote_host, fqdn):
-
 	# Fetch some values from the config file
 	config = ConfigParser.RawConfigParser()
 	config.read(os.path.expanduser(os.path.dirname(__file__) + "/aegir.ini"))
 
-	# These are used as options to Aegir during install
+	# E-mail address of the main Aegir admin user
 	email = config.get('Aegir', 'email')
 	# A trusted IP to grant access to in the firewall
 	trusted_ip = config.get('Aegir', 'trusted_ip')
-	# Where our build files are
-	builds_repo = config.get('Aegir', 'builds_repo')
 
+	# Set a random password, which will be used for the MySQL 'root' user.
 	newpass = gen_passwd()
 
+	# Run through our sub fab functions to install Aegir.
         fab_prepare_firewall(trusted_ip)
         fab_install_dependencies(newpass)
         fab_prepare_apache()
@@ -85,6 +84,6 @@ def main(remote_host, fqdn):
         fab_fetch_provision()
         fab_hostmaster_install(fqdn, email, newpass)
 
-
+# Initialise the main loop
 if __name__ == "__main__":
         main()
