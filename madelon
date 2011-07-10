@@ -1,13 +1,64 @@
 #! /usr/bin/env python
 
-from libcloud.types import Provider 
-from libcloud.providers import get_driver 
-from libcloud.deployment import MultiStepDeployment, ScriptDeployment, SSHKeyDeployment 
+from libcloud.compute.types import Provider 
+from libcloud.compute.providers import get_driver 
+from libcloud.compute.deployment import MultiStepDeployment, ScriptDeployment, SSHKeyDeployment 
+from libcloud.compute.base import NodeAuthSSHKey
+import libcloud.security
+
 import os, sys, ConfigParser
+import unicodedata
+import time
+import paramiko
+import fabric.api as fabric
+
+libcloud.security.VERIFY_SSL_CERT = True
+
+# Set default madelon.ini and fabfile.py locations
+configfile = sys.path[0] + '/config/madelon.ini'
+fabfile = sys.path[0] + '/fabfile.py'
+known_hosts = sys.path[0] + '/config/known_hosts'
+
+# Helpful information to show when requested or when in doubt
+def help():
+	print '\nUsage: madelon [arg1=val1 arg2=val2,...] ...\n\nOptions:'
+	print ' --config=CONFIG'
+	print "         Config file to load madelon settings from, e.g. '~/madelon/myconf.ini'"
+	print "         Optional, defaults to: '" + configfile + "'"
+	print ' --fqdn=FQDN'
+	print '         Fully qualified domain name of the target new server, e.g. '
+	print "         'web1.test.com'. The sub-domain, in this case 'web1', will become"
+	print '         the server hostname.'
+	print ' --fabfile=FABFILE'
+	print '         Fab file to load for launching commands on the new server, e.g.'
+	print "         '~/madelon/fabfiles/fab1.py'. Note, by convention the fab file will"
+	print "         normally be named 'fabfile.py'. Optional, defaults to:"
+	print "         '" + fabfile + "'"
+	sys.exit(0)
+
+# Fetch the arguments from the command line
+args = sys.argv
+if len(args) > 1:
+	args.pop(0)
+	for arg in args:
+		if arg == '--help':
+			help()
+		else:
+			argvals = arg.split('=', 1)
+			# We can build up more arguments here
+			if argvals[0] == '--config' and len(argvals) > 1:
+				configfile = argvals[1]
+			if argvals[0] == '--fqdn' and len(argvals) > 1:
+				fqdn = argvals[1]
+			if argvals[0] == '--fabfile' and len(argvals) > 1:
+				fabfile = argvals[1]
+
+# Report which config file we will attempt to load
+print "Using config file with path %s ..." % configfile
 
 # Fetch some values from the config file
 config = ConfigParser.RawConfigParser()
-config.read('config/madelon.ini')
+config.read(configfile)
 
 # Try to abstract the provider here, as we may end up supporting others
 # Theoretically since we are using libcloud, it should support any
@@ -27,11 +78,18 @@ key = config.get(provider, 'key')
 config_distro = config.get(provider, 'distro')
 config_size = config.get(provider, 'size')
 
-# The git repo of puppet manifests
-repo = config.get('Git', 'repo')
+# Linode requires a datacenter location
+if provider in 'Linode':
+	config_location = config.get(provider, 'location')
 
 # Hostname for the new server
-domain = sys.argv[1]
+try:
+	splitfqdn = fqdn.split('.')
+except NameError:
+	help()
+
+host = splitfqdn[0]
+
 
 remote_host = 0
 
@@ -44,6 +102,7 @@ def dependency_check():
 		import fabric
 	except ImportError:
 		raise SystemExit("You need the Fabric Python library (apt-get install fabric)")
+
 
 def main():
 	# Run some tests
@@ -65,44 +124,71 @@ def main():
 	preferred_image = [image for image in images if config_distro in image.name]
 	preferred_size = [size for size in sizes if config_size in size.name]
 
-	# Commands to run immediately after installation
-	dispatch = [
-		SSHKeyDeployment(open(os.path.expanduser("~/.ssh/id_rsa.pub")).read()),
-		ScriptDeployment("apt-get update"),
-		ScriptDeployment("apt-get install -y git-core puppet lsb-release"),
-	]
-	msd = MultiStepDeployment(dispatch) 
+        # Linode specific, maybe Amazon too..
+        if provider in 'Linode':
+                locations = conn.list_locations()
+		preferred_location = [location for location in locations if config_location in location.name]
 
-	# Create and deploy a new server now, and run the deployment steps defined above
-	print "Provisioning server and installing dependencies..."
-	node = conn.deploy_node(name=domain, image=preferred_image[0], size=preferred_size[0], deploy=msd)
+        print "Provisioning server..."
 
-	print "Provisioning complete, you can ssh as root to %s" % node.public_ip[0]
+	# Linode specific
+        if provider in 'Linode':
+	        pubkey = NodeAuthSSHKey(open(os.path.expanduser("~/.ssh/id_rsa.pub")).read())
+		node = conn.create_node(name=host, image=preferred_image[0], size=preferred_size[0], auth=pubkey, location=preferred_location[0])
+	else:
+		node = conn.create_node(name=host, image=preferred_image[0], size=preferred_size[0])
+
+	# Awful hack: in Linode the public IP is not only not fetchable from the node
+	# object above but is also stored as a unicode attribute inside the list.
+	if provider in 'Linode':
+		nodes = conn.list_nodes()
+		for node in nodes:
+			if host in node.name:
+				remote_host = node.public_ip.pop()
+				remote_host = unicodedata.normalize('NFC', remote_host)
+	else:
+		remote_host = node.public_ip[0]
+
 	if node.extra.get('password'):
 		print "The root user's password is %s" % node.extra.get('password')
+		password = node.extra.get('password')
 
-        if config.getboolean('Git', 'private'):
-		# This is a private repo. We need to do some extra legwork to be able to clone it properly.
-		# Send the private key.
-		print "Deploying the private key..."
-		os.system('fab -H %s -u root deploy_key' % node.public_ip[0])
+        print "Provisioning complete, the IP is %s" % remote_host
 
-	# Now fetch and run puppet on the remote host
-	print "Fetching the puppet git repo %s" % repo
-	os.system('fab -H %s -u root deploy_puppet:repo=%s' % (node.public_ip[0], repo))
+	# Linode VPS aren't immediately available after provisioning because
+	# it's a multistep process of disk/config/swap creation.
+	# Let's try and loop until the node state is 'Running'.
 
-	# Define what roles this server will be, for puppet
-	if config.has_section('Roles'):
-		print "Setting puppet roles for this server..."
-		os.system('fab -H %s -u root select_roles' % node.public_ip[0])
+	var = 1
+	while var == 1:
+                nodes = conn.list_nodes()
+		for node in nodes: 
+			if host in node.name:
+				if node.state == 0:
+					# Machine is up
+					# Time to call our hooks
+				        # Setting some parameters for fabric
+				        fabric.env.host_string = remote_host
+        				fabric.env.user = 'root'
+				        fabric.env.password = password
+				        print fabric.env.password
 
-	# Time to run puppet, or simulate it
-        if config.getboolean('Puppet', 'simulate'):
-		print "Simulating executing the puppet manifests..."
-		os.system('fab -H %s -u root run_puppet:simulate=true' % node.public_ip[0])
-	else:
-		print "Executing the puppet manifests..."
-		os.system('fab -H %s -u root run_puppet' % node.public_ip[0])
-
+					if config.has_section('Hooks'):
+						hooks = config.options('Hooks')
+				        	hooklist = list()
+				        	for hook in hooks:
+							if config.getint('Hooks', hook) == 1:
+								hooklist.append(hook)
+								for hook in hooklist:
+									sys.path.append(sys.path[0] + '/hooks/%s' % (hook))
+									sub_hook = __import__('%s' % hook)
+									sub_hook.main(remote_host, fqdn)
+									var = 2
+									break
+				else:
+					print "New host doesn't seem booted yet. Sleeping and will try again in 20 secs..."
+					time.sleep(20)
+					continue
+				
 if __name__ == "__main__":
 	main()
