@@ -1,8 +1,7 @@
 Madelon is a little script that makes use of libcloud to:
 
  * Provision a server (by default, in the Rackspace Cloud)
- * Install puppet and git on it, and
- * Deploy and execute standalone puppet manifests
+ * Fire off any hooks set to 'enabled' in config/madelon.ini that exist in the subdirectory 'hooks'. These hooks would typically be fabric files to run additional tasks on the new node. An example 'aegir' and 'puppet' hook are provided as an example.
 
 Dependencies
 ------------
@@ -10,20 +9,10 @@ Dependencies
  * python
  * fabric
  * libcloud
- * You need an ssh private/public keypair in the .ssh directory of the user you're executing frigg as, because the public key will be copied to the new VPS to let you login.
- * My libcloud fork (git://github.com/mig5/libcloud.git) has a patch to catch the root user's password to stdout (not that useful since you need a key anyway))
- * If using a private repo, currently requires a copy of known_hosts and the private key is copied up to the server so it can git clone a private repo from github.
 
 Usage
 -----
 
  * edit config/madelon.ini if necessary
- * python madelon some.example.com
-
-
-Caveats
---------
-
- * Still some ways to go to make it work with other providers behind Libcloud (Linode requires python-json and it doesn't work yet. Rackspace Cloud & Slicehost work well)
- * The private repo stuff, as above, depends on a known_hosts file etc. This could surely be handled better.
- * Needs more dependency checking probably
+ * add relevant hooks as required
+ * python madelon --fqdn=some.example.com
