@@ -171,7 +171,6 @@ def main():
 				        fabric.env.host_string = remote_host
         				fabric.env.user = 'root'
 				        fabric.env.password = password
-				        print fabric.env.password
 
 					if config.has_section('Hooks'):
 						hooks = config.options('Hooks')
