@@ -42,6 +42,9 @@ def select_roles(config):
 
 
 def main(remote_host, fqdn):
+        # Install some dependencies
+        install_dependencies(remote_host, fqdn)
+
         # Fetch some values from the config file
         config = ConfigParser.RawConfigParser()
         config.read(os.path.expanduser(os.path.dirname(__file__) + "/puppet.ini"))
@@ -54,7 +57,7 @@ def main(remote_host, fqdn):
                 deploy_key(known_hosts)
 
         # Now fetch and run puppet on the remote host
-	repo = config.getboolean('Git', 'repo')
+	repo = config.get('Git', 'repo')
         print "Fetching the puppet git repo %s" % repo
 	deploy_puppet(repo)
 

@@ -149,9 +149,13 @@ def main():
 	else:
 		remote_host = node.public_ip[0]
 
+        # Setting some parameters for fabric
+        fabric.env.host_string = remote_host
+        fabric.env.user = 'root'
+
 	if node.extra.get('password'):
 		print "The root user's password is %s" % node.extra.get('password')
-		password = node.extra.get('password')
+		fabric.env.password = node.extra.get('password')
 
         print "Provisioning complete, the IP is %s" % remote_host
 
@@ -167,10 +171,6 @@ def main():
 				if node.state == 0:
 					# Machine is up
 					# Time to call our hooks
-				        # Setting some parameters for fabric
-				        fabric.env.host_string = remote_host
-        				fabric.env.user = 'root'
-				        fabric.env.password = password
 
 					if config.has_section('Hooks'):
 						hooks = config.options('Hooks')
