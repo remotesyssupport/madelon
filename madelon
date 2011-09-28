@@ -14,44 +14,41 @@ import fabric.api as fabric
 
 libcloud.security.VERIFY_SSL_CERT = True
 
-# Set default madelon.ini and fabfile.py locations
+# Set default madelon.ini location
 configfile = sys.path[0] + '/config/madelon.ini'
-fabfile = sys.path[0] + '/fabfile.py'
-known_hosts = sys.path[0] + '/config/known_hosts'
 
 # Helpful information to show when requested or when in doubt
 def help():
-	print '\nUsage: madelon [arg1=val1 arg2=val2,...] ...\n\nOptions:'
-	print ' --config=CONFIG'
-	print "         Config file to load madelon settings from, e.g. '~/madelon/myconf.ini'"
-	print "         Optional, defaults to: '" + configfile + "'"
-	print ' --fqdn=FQDN'
-	print '         Fully qualified domain name of the target new server, e.g. '
-	print "         'web1.test.com'. The sub-domain, in this case 'web1', will become"
-	print '         the server hostname.'
-	print ' --fabfile=FABFILE'
-	print '         Fab file to load for launching commands on the new server, e.g.'
-	print "         '~/madelon/fabfiles/fab1.py'. Note, by convention the fab file will"
-	print "         normally be named 'fabfile.py'. Optional, defaults to:"
-	print "         '" + fabfile + "'"
-	sys.exit(0)
+  print '\nUsage: madelon [arg1=val1 arg2=val2,...] ...\n\nOptions:'
+  print ' --config=CONFIG'
+  print "         Config file to load madelon settings from, e.g. '~/madelon/myconf.ini'"
+  print "         Optional, defaults to: '" + configfile + "'"
+  print ' --hookconfig=CONFIG'
+  print '         Config file override for relevant hook. Mainly for Jenkins.'
+  print ' --fqdn=FQDN'
+  print '         Fully qualified domain name of the target new server, e.g. '
+  print "         'web1.test.com'. The sub-domain, in this case 'web1', will become"
+  print '         the server hostname.'
+  sys.exit(0)
 
 # Fetch the arguments from the command line
 args = sys.argv
 if len(args) > 1:
-	args.pop(0)
-	for arg in args:
-		if arg == '--help':
-			help()
-		else:
-			argvals = arg.split('=', 1)
-			# We can build up more arguments here
-			if argvals[0] == '--config' and len(argvals) > 1:
-				configfile = argvals[1]
-			if argvals[0] == '--fqdn' and len(argvals) > 1:
-				fqdn = argvals[1]
-			if argvals[0] == '--fabfile' and len(argvals) > 1:
-				fabfile = argvals[1]
+  args.pop(0)
+  for arg in args:
+    if arg == '--help':
+      help()
+    else:
+      argvals = arg.split('=', 1)
+      # We can build up more arguments here
+      if argvals[0] == '--config' and len(argvals) > 1:
+        configfile = argvals[1]
+      if argvals[0] == '--fqdn' and len(argvals) > 1:
+        fqdn = argvals[1]
+      if argvals[0] == '--hookconfig' and len(argvals) > 1:
+        hookconfigfile = argvals[1]
+      else:
+        hookconfigfile = "null"
 
 # Report which config file we will attempt to load
 print "Using config file with path %s ..." % configfile
@@ -70,7 +67,7 @@ provider_driver = config.get(provider, 'driver')
 # Some providers don't have user attributes, only keys
 # Bit of a hack right now
 if provider not in [ 'Slicehost', 'Linode']:
-	user = config.get(provider, 'user')
+  user = config.get(provider, 'user')
 
 key = config.get(provider, 'key')
 
@@ -80,114 +77,137 @@ config_size = config.get(provider, 'size')
 
 # Linode requires a datacenter location
 if provider in 'Linode':
-	config_location = config.get(provider, 'location')
+  config_location = config.get(provider, 'location')
 
 # Hostname for the new server
 try:
-	splitfqdn = fqdn.split('.')
+  splitfqdn = fqdn.split('.')
 except NameError:
-	help()
+  help()
 
 host = splitfqdn[0]
-
-
 remote_host = 0
 
+# Check some dependencies
 def dependency_check():
-	try:
-		open(os.path.expanduser("~/.ssh/id_rsa.pub")).read()
-	except IOError:
-		raise SystemExit("You need at least a public key called id_rsa.pub in your .ssh directory")
-	try:
-		import fabric
-	except ImportError:
-		raise SystemExit("You need the Fabric Python library (apt-get install fabric)")
+  try:
+    open(os.path.expanduser("~/.ssh/id_rsa.pub")).read()
+  except IOError:
+    raise SystemExit("You need at least a public key called id_rsa.pub in your .ssh directory")
+  try:
+    import fabric
+  except ImportError:
+    raise SystemExit("You need the Fabric Python library (apt-get install fabric)")
 
 
+# Main code
 def main():
-	# Run some tests
-	dependency_check()
+  # Run some tests
+  dependency_check()
 
-	# Make a new connection
-	Driver = get_driver( getattr(Provider, provider_driver) )
-	try:
-		conn = Driver(user, key)
-	except(NameError):
-		conn = Driver(key)
+  # Make a new connection
+  Driver = get_driver( getattr(Provider, provider_driver) )
+  try:
+    conn = Driver(user, key)
+  except(NameError):
+    conn = Driver(key)
 
-	# Get a list of the available images and sizes
-	images = conn.list_images()
-	sizes = conn.list_sizes()
+  # Get a list of the available images and sizes
+  images = conn.list_images()
+  sizes = conn.list_sizes()
 
-	# We'll use the distro and size from the config ini
-	# We accept the first result in any that match for now
-	preferred_image = [image for image in images if config_distro in image.name]
-	preferred_size = [size for size in sizes if config_size in size.name]
+  # We'll use the distro and size from the config ini
+  # We accept the first result in any that match for now
+  preferred_image = [image for image in images if config_distro in image.name]
+  # Don't let mig provision 12GB machines and cost us a fuckload of cash.
+  if provider in 'Linode':
+    if config_size in "2GB":
+      print "You put 2GB as a size at Linode. I think you meant 2048MB..! Don't be provisioning 12GB machines now, or you'll get a knuckle sandwich."
+      preferred_size = [size for size in sizes if "2048" in size.name]
 
-        # Linode specific, maybe Amazon too..
-        if provider in 'Linode':
-                locations = conn.list_locations()
-		preferred_location = [location for location in locations if config_location in location.name]
+    else:
+      preferred_size = [size for size in sizes if config_size in size.name]
+  else:
+    preferred_size = [size for size in sizes if config_size in size.name]
 
-        print "Provisioning server..."
+  # Set a location. Linode specific, maybe Amazon too.. not required for Rackspace Cloud
+  if provider in 'Linode':
+    locations = conn.list_locations()
+    preferred_location = [location for location in locations if config_location in location.name]
 
-	# Linode specific
-        if provider in 'Linode':
-	        pubkey = NodeAuthSSHKey(open(os.path.expanduser("~/.ssh/id_rsa.pub")).read())
-		node = conn.create_node(name=host, image=preferred_image[0], size=preferred_size[0], auth=pubkey, location=preferred_location[0])
-	else:
-		node = conn.create_node(name=host, image=preferred_image[0], size=preferred_size[0])
+  print "Provisioning server..."
 
-	# Awful hack: in Linode the public IP is not only not fetchable from the node
-	# object above but is also stored as a unicode attribute inside the list.
-	if provider in 'Linode':
-		nodes = conn.list_nodes()
-		for node in nodes:
-			if host in node.name:
-				remote_host = node.public_ip.pop()
-				remote_host = unicodedata.normalize('NFC', remote_host)
-	else:
-		remote_host = node.public_ip[0]
+  # Linode specific, or anywhere that needs a public key to provision.
+  if provider in 'Linode':
+    pubkey = NodeAuthSSHKey(open(os.path.expanduser("~/.ssh/id_rsa.pub")).read())
+    node = conn.create_node(name=host, image=preferred_image[0], size=preferred_size[0], auth=pubkey, location=preferred_location[0])
+  else:
+    node = conn.create_node(name=host, image=preferred_image[0], size=preferred_size[0])
 
-        # Setting some parameters for fabric
-        fabric.env.host_string = remote_host
-        fabric.env.user = 'root'
+  # Awful hack: in Linode the public IP is not only not fetchable from the node
+  # object above but is also stored as a unicode attribute inside the list.
+  if provider in 'Linode':
+    nodes = conn.list_nodes()
+    for node in nodes:
+      if host == node.name:
+        remote_host = node.public_ip.pop()
+	remote_host = unicodedata.normalize('NFC', remote_host)
+  else:
+    remote_host = node.public_ip[0]
 
-	if node.extra.get('password'):
-		print "The root user's password is %s" % node.extra.get('password')
-		fabric.env.password = node.extra.get('password')
+  # Setting some parameters for fabric
+  fabric.env.host_string = remote_host
+  fabric.env.user = 'root'
 
-        print "Provisioning complete, the IP is %s" % remote_host
+  # If we received a password from the provisioning, remember that.
+  # Some providers that don't respect keys, will need it to authenticate in fab
+  if node.extra.get('password'):
+    print "The root user's password is %s" % node.extra.get('password')
+    fabric.env.password = node.extra.get('password')
 
-	# Linode VPS aren't immediately available after provisioning because
-	# it's a multistep process of disk/config/swap creation.
-	# Let's try and loop until the node state is 'Running'.
+  print "Provisioning complete, the IP is %s" % remote_host
 
-	var = 1
-	while var == 1:
-                nodes = conn.list_nodes()
-		for node in nodes: 
-			if host in node.name:
-				if node.state == 0:
-					# Machine is up
-					# Time to call our hooks
-
-					if config.has_section('Hooks'):
-						hooks = config.options('Hooks')
-				        	hooklist = list()
-				        	for hook in hooks:
-							if config.getint('Hooks', hook) == 1:
-								hooklist.append(hook)
-								for hook in hooklist:
-									sys.path.append(sys.path[0] + '/hooks/%s' % (hook))
-									sub_hook = __import__('%s' % hook)
-									sub_hook.main(remote_host, fqdn)
-									var = 2
-									break
-				else:
-					print "New host doesn't seem booted yet. Sleeping and will try again in 20 secs..."
-					time.sleep(20)
-					continue
+  # VPS aren't immediately available after provisioning because
+  # it's a multistep process of disk/config/swap creation.
+  # Let's try and loop until the node state is 'Running'.
+  var = 1
+  while var == 1:
+    nodes = conn.list_nodes()
+    for node in nodes: 
+      if host == node.name:
+        if node.state == 0:
+          # Machine is up
+          print "%s is running. Let's do it!" % remote_host
+          # Time to call our hooks
+          if config.has_section('Hooks'):
+            hooks = config.options('Hooks')
+            hooklist = list()
+	    for hook in hooks:
+              # Add any 'enabled' hooks into our array
+              if config.getint('Hooks', hook) == 1:
+                hooklist.append(hook)
+                print hooklist
+            for hook in hooklist:
+              sys.path.append(sys.path[0] + '/hooks/%s' % (hook))
+              try:
+                sub_hook = __import__('%s' % hook)
+                print "Will be invoking %s hook" % hook
+              except ImportError:
+                raise SystemExit("Could not import hook %s. Check the main() function exists" % hook)
+              # Throw an additional config file override (e.g for puppet) if it's present
+              if hookconfigfile:
+                sub_hook.main(remote_host, fqdn, hookconfigfile)
+                continue
+              else:
+                sub_hook.main(remote_host, fqdn)
+                continue
+              hooklist.remove(hook)
+          var = 2
+          break
+        else:
+          print "New host doesn't seem booted yet. Sleeping and will try again in 60 secs..."
+          time.sleep(60)
+          continue
 				
 if __name__ == "__main__":
-	main()
+  main()
